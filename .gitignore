@@ -19,6 +19,7 @@ ENV/
 .env.*
 !.env.example
 deploy/meshverse.env
+bridge_aliases.json
 
 # Logs and temporary files
 *.log

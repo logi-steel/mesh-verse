@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "aliases": {
+    "meshtastic": {
+      "!a1b2c3d4": "MT-ALFA",
+      "!e5f60718": "MT-BRAVO"
+    },
+    "meshcore": {
+      "a1b2c3d4": "MC-ALFA",
+      "e5f60718": "MC-BRAVO"
+    }
+  }
+}

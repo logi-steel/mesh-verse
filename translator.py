@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Mesh Verse MVP v2.1: public-channel Meshtastic <-> MeshCore bridge.
+Mesh Verse MVP v2.2: public-channel Meshtastic <-> MeshCore bridge.
 
 What this version does:
 - forwards public text-channel messages in both directions;
 - uses the high-level Python APIs of both projects;
+- relays a stable pseudonymous source alias instead of an original display name;
 - does NOT forward private/direct messages, position data, telemetry, files,
   binary packets, or raw LoRa frames;
 - keeps a short duplicate cache to avoid simple bridge loops.
@@ -23,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import meshtastic.serial_interface
+from identity_aliases import AliasConfigurationError, AliasRegistry, format_relay_text
 from meshcore import EventType, MeshCore
 from pubsub import pub
 
@@ -43,6 +45,7 @@ class BridgeConfig:
     max_text_chars: int
     dry_run: bool
     debug: bool
+    alias_file: Optional[str] = None
 
 
 @dataclass
@@ -137,12 +140,22 @@ class MeshVerseBridge:
 
     Public channel text is the safe MVP. Direct messages need an explicit,
     user-managed Meshtastic-node <-> MeshCore-contact mapping and should not be
-    guessed from unrelated node IDs or public-key prefixes.
+    guessed from unrelated node IDs, display names, or public-key prefixes.
+
+    Public relays are prefixed with a local pseudonymous alias. Aliases help
+    readers distinguish source devices but are not proof of human identity.
     """
 
     def __init__(self, config: BridgeConfig) -> None:
         self.config = config
         self.deduper = DuplicateCache(config.dedupe_seconds)
+        self.aliases = (
+            AliasRegistry.from_file(config.alias_file)
+            if config.alias_file is not None
+            else AliasRegistry()
+        )
+        if config.alias_file is not None:
+            LOGGER.info("Loaded local aliases from %s", config.alias_file)
 
         self.meshtastic_iface: Optional[Any] = None
         self.meshcore: Optional[MeshCore] = None
@@ -245,26 +258,35 @@ class MeshVerseBridge:
 
         return clean_text(decoded.get("text"), self.config.max_text_chars)
 
+    def _relay_text(self, network: str, source: Any, text: str) -> tuple[str, str]:
+        """Return the local alias and safely prefixed public relay message."""
+        alias = self.aliases.alias_for(network, source)
+        return alias, format_relay_text(alias, text, self.config.max_text_chars)
+
     async def _handle_meshtastic_packet(self, packet: dict[str, Any]) -> None:
         text = self._extract_meshtastic_public_text(packet)
         if text is None:
             return
 
-        # FIX: If this same text was recently sent *to Meshtastic* by the
-        # bridge, a Meshtastic receive event may be our own echo. Drop it.
+        # If this same text was recently sent *to Meshtastic* by the bridge, a
+        # Meshtastic receive event may be our own echo. Drop it before applying
+        # another alias prefix.
         if self.deduper.was_sent_to("meshtastic", text):
             LOGGER.debug("Dropped Meshtastic echo: %r", text)
             return
 
         source = packet.get("fromId") or packet.get("from") or "unknown"
-        LOGGER.info("Meshtastic -> MeshCore from %s: %s", source, text)
+        alias, relayed_text = self._relay_text("meshtastic", source, text)
+        LOGGER.debug("Meshtastic source ID %s resolved to alias %s", source, alias)
+        LOGGER.info("Meshtastic -> MeshCore as %s: %s", alias, text)
 
         if self.config.dry_run:
             LOGGER.info(
-                "[dry-run] Would send to MeshCore channel %d",
+                "[dry-run] Would send to MeshCore channel %d: %s",
                 self.config.meshcore_channel,
+                relayed_text,
             )
-            self.deduper.remember_sent_to("meshcore", text)
+            self.deduper.remember_sent_to("meshcore", relayed_text)
             return
 
         if self.meshcore is None:
@@ -273,13 +295,13 @@ class MeshVerseBridge:
 
         result = await self.meshcore.commands.send_chan_msg(
             self.config.meshcore_channel,
-            text,
+            relayed_text,
         )
         if result.type == EventType.ERROR:
             LOGGER.error("MeshCore rejected message: %s", result.payload)
             return
 
-        self.deduper.remember_sent_to("meshcore", text)
+        self.deduper.remember_sent_to("meshcore", relayed_text)
         LOGGER.info("Forwarded to MeshCore successfully")
 
     async def _on_meshcore_channel_message(self, event: Any) -> None:
@@ -303,21 +325,25 @@ class MeshVerseBridge:
         if text is None:
             return
 
-        # FIX: If this same text was recently sent *to MeshCore* by the bridge,
-        # a MeshCore channel event may be our own echo. Drop it.
+        # If this same text was recently sent *to MeshCore* by the bridge, a
+        # MeshCore channel event may be our own echo. Drop it before applying
+        # another alias prefix.
         if self.deduper.was_sent_to("meshcore", text):
             LOGGER.debug("Dropped MeshCore echo: %r", text)
             return
 
         source = payload.get("pubkey_prefix", "unknown")
-        LOGGER.info("MeshCore -> Meshtastic from %s: %s", source, text)
+        alias, relayed_text = self._relay_text("meshcore", source, text)
+        LOGGER.debug("MeshCore source ID %s resolved to alias %s", source, alias)
+        LOGGER.info("MeshCore -> Meshtastic as %s: %s", alias, text)
 
         if self.config.dry_run:
             LOGGER.info(
-                "[dry-run] Would send to Meshtastic channel %d",
+                "[dry-run] Would send to Meshtastic channel %d: %s",
                 self.config.meshtastic_channel,
+                relayed_text,
             )
-            self.deduper.remember_sent_to("meshtastic", text)
+            self.deduper.remember_sent_to("meshtastic", relayed_text)
             return
 
         if self.meshtastic_iface is None:
@@ -326,13 +352,13 @@ class MeshVerseBridge:
 
         # Broadcast only. Public channel traffic must not silently become a DM.
         self.meshtastic_iface.sendText(
-            text,
+            relayed_text,
             destinationId="^all",
             wantAck=False,
             channelIndex=self.config.meshtastic_channel,
         )
 
-        self.deduper.remember_sent_to("meshtastic", text)
+        self.deduper.remember_sent_to("meshtastic", relayed_text)
         LOGGER.info("Forwarded to Meshtastic successfully")
 
     async def close(self) -> None:
@@ -353,12 +379,10 @@ class MeshVerseBridge:
                     self.meshcore.unsubscribe(subscription)
                 except Exception:
                     LOGGER.debug("MeshCore subscription was already removed")
-
             try:
                 await self.meshcore.stop_auto_message_fetching()
             except Exception:
                 LOGGER.debug("MeshCore auto-fetcher was already stopped")
-
             try:
                 await self.meshcore.disconnect()
             except Exception:
@@ -409,7 +433,14 @@ def parse_args() -> argparse.Namespace:
         "--max-text-chars",
         type=int,
         default=180,
-        help="Maximum forwarded text length; longer messages are visibly truncated (default: 180)",
+        help="Maximum forwarded text length including the alias prefix (default: 180)",
+    )
+    parser.add_argument(
+        "--alias-file",
+        help=(
+            "Optional JSON file with local source aliases; see "
+            "bridge_aliases.example.json"
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -444,6 +475,7 @@ async def run_bridge(args: argparse.Namespace) -> None:
         max_text_chars=args.max_text_chars,
         dry_run=args.dry_run,
         debug=args.debug,
+        alias_file=args.alias_file,
     )
     bridge = MeshVerseBridge(config)
 
@@ -467,6 +499,9 @@ def main() -> None:
         asyncio.run(run_bridge(args))
     except KeyboardInterrupt:
         LOGGER.info("Shutdown requested by user")
+    except AliasConfigurationError as exc:
+        LOGGER.error("Alias configuration error: %s", exc)
+        raise SystemExit(2) from exc
 
 
 if __name__ == "__main__":
