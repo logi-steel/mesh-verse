@@ -1,0 +1,24 @@
+[Unit]
+Description=Mesh Verse public-channel bridge
+Documentation=https://github.com/logi-steel/mesh-verse
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=meshverse
+Group=dialout
+SupplementaryGroups=dialout
+WorkingDirectory=/opt/mesh-verse
+EnvironmentFile=/etc/mesh-verse/bridge.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/mesh-verse/.venv/bin/python /opt/mesh-verse/translator.py --meshtastic-port ${MESHTASTIC_PORT} --meshcore-port ${MESHCORE_PORT} --meshtastic-channel ${MESHTASTIC_CHANNEL} --meshcore-channel ${MESHCORE_CHANNEL} --dedupe-seconds ${DEDUPE_SECONDS} --max-text-chars ${MAX_TEXT_CHARS}
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
