@@ -4,6 +4,8 @@
 
 Mesh Verse is a deliberately narrow bridge between a **Meshtastic public text channel** and a **MeshCore public text channel**.
 
+**New to the project?** Start with the [First Real Setup guide](docs/SETUP.md). It explains the required two-radio architecture, controlled testing, and MacBook/Raspberry Pi setup.
+
 ## What it does
 
 - forwards public text-channel messages in both directions;
