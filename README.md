@@ -1,39 +1,55 @@
 # Mesh Verse
 
-> **Status: experimental MVP.** Mesh Verse is currently an AI-assisted prototype maintained by the repository owner. It is not hardware-tested or production-ready yet, so use it first with `--dry-run` and only on radios you control.
+> **v0.1.0, experimental.** A small host-side bridge that copies public text between one Meshtastic channel and one MeshCore channel.
 
-Mesh Verse is a deliberately narrow bridge between a **Meshtastic public text channel** and a **MeshCore public text channel**.
+Mesh Verse runs on a Raspberry Pi, Mac, or Linux computer with **two separate radio devices connected by USB**:
 
-**New to the project?** Start with the [First Real Setup guide](docs/SETUP.md). It explains the required two-radio architecture, controlled testing, and MacBook/Raspberry Pi setup. For display aliases, read [Alias guide](docs/ALIASES.md).
+```text
+Meshtastic users
+      ↓ LoRa
+Meshtastic gateway radio ─USB─┐
+                              ├─ host computer running Mesh Verse
+MeshCore gateway radio ─USB───┘
+      ↓ LoRa
+MeshCore users
+```
 
-## What it does
+It does not turn one radio into both systems. One supported Meshtastic radio and one supported MeshCore Companion radio are required.
 
-- forwards public text-channel messages in both directions;
-- prefixes relayed text with a stable local alias such as `[MT-ALFA]` or `[MC-BRAVO]` instead of forwarding an original display name;
-- keeps a short duplicate cache to reduce simple bridge loops;
-- lets you choose a channel index on each side;
-- has a dry-run mode that logs decisions without transmitting;
-- includes `meshverse-doctor`, a read-only serial-port preflight helper.
+## What v0.1.0 does
+
+- copies public text messages in both directions;
+- bridges exactly one configured public channel on each side;
+- labels forwarded messages with a visible envelope such as `[MV/MT-ALFA] hello`;
+- generates stable pseudonymous aliases automatically, with optional local friendly aliases;
+- rejects direct/private messages, telemetry, positions, files, binary packets, and raw LoRa frames;
+- blocks local echoes and ignores messages that already carry a Mesh Verse relay envelope;
+- provides `--check-config`, `--dry-run`, `--version`, hardware-free tests, and a read-only serial preflight helper.
 
 ## What it does not do
 
-- direct/private messages;
-- position data, telemetry, files, binary packets, or raw LoRa frames;
-- automatic contact matching or direct-message routing between networks;
-- radio configuration, firmware flashing, or frequency changes;
-- identity verification. A relay alias is a label, not proof of who typed a message.
+- private/direct-message routing between Meshtastic and MeshCore;
+- identity verification or account linking;
+- translation of human languages;
+- automatic reconnection after a radio is unplugged;
+- configuration or flashing of either radio;
+- a global internet relay.
 
-That limitation is intentional. A bridge should not quietly turn private traffic into public traffic because someone thought “it will probably be fine.” Humanity already has enough of those decisions.
+Messages are copied as ordinary public text. A relayed message remains visible on its original network and appears as a new public message on the other network.
+
+## Safety model
+
+Only public broadcast text from the configured channels is eligible for relay. The bridge never guesses that a private packet is public. Aliases are labels controlled locally by the bridge owner, not proof of a person's identity.
+
+Use a controlled channel first. Do not bridge a community/default channel without the channel owner's permission. Follow the radio rules for your country or region.
 
 ## Requirements
 
 - Python **3.10+**;
 - one Meshtastic radio reachable over USB serial;
-- one MeshCore companion reachable over USB serial;
-- a public channel configured on both systems;
-- Go **1.20+** only if you want to build or run `meshverse-doctor`.
-
-Use hardware, channels, and radio settings that comply with the rules where you operate.
+- one MeshCore **Companion** radio reachable over USB serial;
+- a public channel set up on both systems;
+- Go **1.20+** only for `meshverse-doctor`.
 
 ## Install
 
@@ -46,117 +62,102 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-On Windows, activate the virtual environment with:
+Check the installed release:
 
-```powershell
-.\.venv\Scripts\Activate.ps1
+```bash
+python translator.py --version
 ```
 
-## Check the serial paths first
+## Choose the two channels
 
-`meshverse-doctor` never opens, writes to, configures, or resets a radio. It only checks paths and prints a safe dry-run command.
+Create one public channel on Meshtastic and one public channel on MeshCore. They can have the same human-friendly name, but they are separate channels in separate systems.
+
+```text
+Meshtastic: MV-Bridge-MT
+MeshCore:   MV-Bridge-MC
+```
+
+Set the bridge to their channel indices. A message on any other channel is ignored.
+
+## Find stable USB paths
+
+Prefer stable Linux paths from `/dev/serial/by-id/` because `/dev/ttyACM0` and `/dev/ttyUSB0` may change after a reboot.
 
 ```bash
 go run ./tools/meshverse-doctor \
-  --meshtastic-port /dev/ttyACM0 \
-  --meshcore-port /dev/ttyUSB0
+  --meshtastic-port /dev/serial/by-id/your-meshtastic-radio \
+  --meshcore-port /dev/serial/by-id/your-meshcore-radio
 ```
 
-For a machine-readable report:
+## Validate before using radios
 
-```bash
-go run ./tools/meshverse-doctor --json
-```
-
-On Linux, prefer a stable `/dev/serial/by-id/...` path when possible. `/dev/ttyACM0` and `/dev/ttyUSB0` can swap after a reboot, because computers apparently enjoy assigning names by vibes.
-
-## First bridge run: dry-run
+`--check-config` validates the arguments and alias file without opening a serial port or transmitting:
 
 ```bash
 python translator.py \
   --meshtastic-port /dev/serial/by-id/your-meshtastic-radio \
   --meshcore-port /dev/serial/by-id/your-meshcore-radio \
-  --meshtastic-channel 0 \
-  --meshcore-channel 0 \
+  --meshtastic-channel 1 \
+  --meshcore-channel 1 \
+  --check-config
+```
+
+## First run: dry-run
+
+Dry-run opens the radios and logs what it *would* forward, but never transmits a relay message.
+
+```bash
+python translator.py \
+  --meshtastic-port /dev/serial/by-id/your-meshtastic-radio \
+  --meshcore-port /dev/serial/by-id/your-meshcore-radio \
+  --meshtastic-channel 1 \
+  --meshcore-channel 1 \
   --dry-run \
   --debug
 ```
 
-Dry-run prints what the bridge would forward but never sends a packet. Confirm that only the expected public-channel text is detected before using the real bridge.
+Send a short public message from a controlled source on each side. Confirm that the logs show only the expected selected channel and that no private messages are considered.
 
-## Pseudonymous relay aliases
+## Live bridge
 
-Without an alias file, Mesh Verse derives deterministic aliases from the sender's local network identifier, for example `[MT-8F12AB]` or `[MC-90CDEF]`. The same source keeps the same fallback alias after a restart.
+Remove `--dry-run` only after the dry-run looks correct:
 
-To choose friendlier local labels, create an ignored local config file from the example:
+```bash
+python translator.py \
+  --meshtastic-port /dev/serial/by-id/your-meshtastic-radio \
+  --meshcore-port /dev/serial/by-id/your-meshcore-radio \
+  --meshtastic-channel 1 \
+  --meshcore-channel 1
+```
+
+Example result:
+
+```text
+Meshtastic source: "hello"
+MeshCore sees:     [MV/MT-8F12AB] hello
+```
+
+The `[MV/...]` part is intentional. It labels the source side and stops another bridge from relaying an already relayed message a second time.
+
+## Friendly aliases
+
+Without a file, aliases are deterministic identifiers such as `MT-8F12AB` and `MC-90CDEF`. To assign friendly local labels, copy the example:
 
 ```bash
 cp bridge_aliases.example.json bridge_aliases.json
 ```
 
-Edit only the local `bridge_aliases.json`, then add it to the bridge command:
+Run with:
 
 ```bash
-python translator.py \
-  --meshtastic-port /dev/serial/by-id/your-meshtastic-radio \
-  --meshcore-port /dev/serial/by-id/your-meshcore-radio \
-  --alias-file bridge_aliases.json \
-  --dry-run \
-  --debug
+python translator.py ... --alias-file bridge_aliases.json --dry-run --debug
 ```
 
-The alias map uses source identifiers, not human display names. It controls what label crosses the bridge, but it does **not** provide private routing or cryptographic identity verification. See [docs/ALIASES.md](docs/ALIASES.md) for the format and examples.
+See [docs/ALIASES.md](docs/ALIASES.md) for the exact format. Keep `bridge_aliases.json` local. It is intentionally ignored by Git.
 
-## Live bridge
+## systemd service
 
-Remove `--dry-run` only after the preflight run looks correct:
-
-```bash
-python translator.py \
-  --meshtastic-port /dev/serial/by-id/your-meshtastic-radio \
-  --meshcore-port /dev/serial/by-id/your-meshcore-radio \
-  --meshtastic-channel 0 \
-  --meshcore-channel 0 \
-  --alias-file bridge_aliases.json
-```
-
-Stop it with `Ctrl+C`.
-
-## Command-line options
-
-| Option | Default | Purpose |
-| --- | --- | --- |
-| `--meshtastic-port` | required | Meshtastic USB serial path |
-| `--meshcore-port` | required | MeshCore USB serial path |
-| `--meshtastic-channel` | `0` | Meshtastic public channel index |
-| `--meshcore-channel` | `0` | MeshCore public channel index |
-| `--dedupe-seconds` | `120` | Time window used to suppress loop echoes |
-| `--max-text-chars` | `180` | Maximum forwarded text length, including alias prefix |
-| `--alias-file` | off | Optional local JSON map of source IDs to friendly aliases |
-| `--dry-run` | off | Log actions without transmitting |
-| `--debug` | off | Enable detailed logging |
-
-## Tests
-
-Python tests do not require radios. They test text filtering, broadcast detection, deduplication, alias formatting, and the public-only packet filter.
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-For the Go helper:
-
-```bash
-cd tools/meshverse-doctor
-go test ./...
-go vet ./...
-```
-
-GitHub Actions runs these checks automatically for pushes and pull requests.
-
-## Optional systemd service
-
-A service template is included at `deploy/meshverse.service`. It reads serial paths and channel numbers from `/etc/mesh-verse/bridge.env`.
+A service template lives in `deploy/meshverse.service`. It expects the repository and virtual environment at `/opt/mesh-verse` and the configuration at `/etc/mesh-verse/bridge.env`.
 
 ```bash
 sudo useradd --system --home /opt/mesh-verse --shell /usr/sbin/nologin --groups dialout meshverse
@@ -169,16 +170,21 @@ sudo systemctl enable --now meshverse
 sudo systemctl status meshverse
 ```
 
-The service template expects a checked-out repository and virtual environment at `/opt/mesh-verse`. Adjust the paths if your installation lives elsewhere.
+## Tests
 
-## Safety and privacy
+The automated test suite uses fake radios. It verifies both relay directions, the relay envelope, echo suppression, private-message filtering, alias handling, and configuration validation. It cannot prove RF range or compatibility with every real firmware build.
 
-- Keep this bridge on public channels only.
-- Do not use it to relay private conversations without explicit consent from everyone involved.
-- A bridge alias is a readable pseudonym, not a verified legal identity.
-- Back up your configurations before changing radio firmware or settings.
-- Start with `--dry-run` every time the hardware, port paths, channel layout, or alias map changes.
+```bash
+python -m unittest discover -s tests -v
+cd tools/meshverse-doctor
+go vet ./...
+go test ./...
+```
 
-## Project direction
+## Release notes
 
-The goal is a small, understandable, auditable bridge: not a giant mystery box that decides which network traffic belongs somewhere else. Contributions that preserve the public-only MVP and add tests are welcome.
+See [CHANGELOG.md](CHANGELOG.md) and [v0.1.0 release notes](docs/releases/v0.1.0.md).
+
+## License
+
+Mesh Verse is released under the GNU GPL v3. See [LICENSE](LICENSE).
