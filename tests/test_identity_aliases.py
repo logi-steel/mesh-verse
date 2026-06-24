@@ -64,7 +64,7 @@ class AliasRegistryTests(unittest.TestCase):
 class RelayTextTests(unittest.TestCase):
     def test_prefixes_and_truncates_within_limit(self) -> None:
         self.assertEqual(format_relay_text("MT-ALFA", "hello", 32), "[MT-ALFA] hello")
-        self.assertEqual(format_relay_text("MT-ALFA", "abcdefghij", 14), "[MT-ALFA] ab…")
+        self.assertEqual(format_relay_text("MT-ALFA", "abcdefghij", 14), "[MT-ALFA] abc…")
 
 
 if __name__ == "__main__":
