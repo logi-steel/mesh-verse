@@ -1,73 +1,51 @@
-# Pseudonymous Relay Aliases
+# Mesh Verse aliases
 
-Mesh Verse relays **public-channel text only**. When it forwards a message, it prefixes the text with a source label:
+Mesh Verse relays public-channel text only. Every copied message has a visible relay envelope:
 
 ```text
-[MT-ALFA] hello from Meshtastic
-[MC-BRAVO] hello from MeshCore
+[MV/MT-ALFA] hello from Meshtastic
+[MV/MC-BRAVO] hello from MeshCore
 ```
 
-This lets people on the other network tell messages apart without relaying the sender's original display name.
+`MV` means Mesh Verse. `MT-...` means the source was Meshtastic, while `MC-...` means the source was MeshCore.
 
-## What an alias is, and is not
+## Why the envelope is visible
 
-An alias is a **local display label controlled by the bridge owner**.
+The envelope helps people recognise the source side and prevents a second bridge from copying an already relayed message again. Do not remove it. A message beginning with `[MV/... ]` is deliberately ignored by Mesh Verse when received as input.
 
-It is useful for privacy and readability. It is **not**:
+## What aliases are not
+
+An alias is a local readability and privacy label. It is not:
 
 - a private-message address;
-- a shared MeshCore/Meshtastic account;
-- cryptographic identity verification;
-- proof that a human rather than another node typed a message.
+- a shared account between systems;
+- a verified identity;
+- proof of who typed the message.
 
-Mesh Verse still broadcasts each forwarded message to the selected public channel. It does not use aliases to route a reply to a specific person.
+Replies remain ordinary public messages on the selected channel.
 
 ## Automatic aliases
 
-You do not need to configure anything for basic aliases. When no alias map is supplied, the bridge derives a stable label from the source identifier:
+No setup is required. A source ID gets a stable fallback alias after a restart:
 
 ```text
 Meshtastic source !a1b2c3d4 -> MT-8F12AB
 MeshCore source a1b2c3d4     -> MC-90CDEF
 ```
 
-The prefix identifies the originating network:
+The original source identifier is not placed in the relayed message.
 
-- `MT-...` means the text came from Meshtastic;
-- `MC-...` means the text came from MeshCore.
+## Friendly aliases
 
-The fallback is deterministic: the same source receives the same fallback alias after a restart. The original identifier itself is not placed inside the relayed message.
-
-## Friendly custom aliases
-
-1. Copy the example file:
+1. Copy the example config:
 
 ```bash
 cp bridge_aliases.example.json bridge_aliases.json
 ```
 
-2. Run a controlled dry-run with debug logging:
+2. Run a controlled dry-run with `--debug` and send one public test message from each source radio.
 
-```bash
-python translator.py \
-  --meshtastic-port /dev/serial/by-id/your-meshtastic-radio \
-  --meshcore-port /dev/serial/by-id/your-meshcore-radio \
-  --dry-run \
-  --debug
-```
-
-3. Send one ordinary **public channel** test message from each source device.
-
-4. Read the local terminal log. Mesh Verse prints lines such as:
-
-```text
-Meshtastic source ID !a1b2c3d4 resolved to alias MT-8F12AB
-MeshCore source ID a1b2c3d4 resolved to alias MC-90CDEF
-```
-
-5. Put those source IDs into `bridge_aliases.json`, then choose an alias. The alias must contain only ASCII letters, numbers, `-`, or `_`, and must be 1–24 characters long.
-
-Example:
+3. Put the source identifiers shown in the local log into `bridge_aliases.json`:
 
 ```json
 {
@@ -83,7 +61,7 @@ Example:
 }
 ```
 
-6. Restart the bridge with the file:
+4. Start Mesh Verse with the file:
 
 ```bash
 python translator.py \
@@ -94,23 +72,8 @@ python translator.py \
   --debug
 ```
 
-Now source `!a1b2c3d4` appears on MeshCore as `[MT-ALFA] ...`, and source `a1b2c3d4` appears on Meshtastic as `[MC-BRAVO] ...`.
+Aliases may use only ASCII letters, digits, `-`, or `_`, and must be 1-24 characters long.
 
 ## Keep the map local
 
-`bridge_aliases.json` is ignored by Git. Keep it local because it links source identifiers to your chosen labels. The public `bridge_aliases.example.json` contains only fake values.
-
-## Replying across the bridge
-
-For this MVP, a person replies by writing another message on the public channel. For example:
-
-```text
-[MT-ALFA] Can someone test this?
-[MC-BRAVO] Received.
-```
-
-The bridge does **not** automatically turn a reply to `MT-ALFA` into a Meshtastic direct message. A future private-routing design would need an explicit owner-approved mapping of full device/contact identities and separate consent rules. A nickname alone is not enough, because nicknames can collide or be changed.
-
-## Message length
-
-The alias prefix counts toward `--max-text-chars`. With the default limit of 180 characters, this is rarely a problem. If a message is too long, Mesh Verse keeps the alias and visibly truncates the text with `…`.
+`bridge_aliases.json` is ignored by Git because it links local source identifiers to labels you chose. The example file contains fake values only.
