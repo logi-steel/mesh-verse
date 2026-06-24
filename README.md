@@ -1,4 +1,10 @@
 # Mesh Verse
+# WARNING THIS PROJECT IS IN 90% MADE BY AI
+IT IS ONLY A EXPERIMENT TO PUBLIC
+I AM STILL LEARNING CERTAIN LANGUAGES 
+IN LATER RELEASES IT WILL BE MADE BY ME
+
+#Back to main 
 
 > **v0.1.0, experimental.** A small bridge that copies public text between one Meshtastic channel and one MeshCore channel.
 
