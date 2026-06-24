@@ -25,10 +25,10 @@ You need **two separate USB radios**: one running Meshtastic and one running Mes
 - Copies public text in both directions.
 - Bridges one chosen channel on each network.
 - Adds a source label, for example `[MV/MT-ALFA] hello`.
-- Ignores private messages, telemetry, positions, files, and raw packets.
+- Ignores private messages, telemetry, positions, files, and raw packets (private messages will be in the next versions).
 - Blocks obvious echoes and messages already marked as relayed.
 
-It copies a message. The original stays on its first network.
+It sends a copy of a message. The original stays on its first network.
 
 ## Quick start
 
@@ -104,7 +104,7 @@ Read [docs/ALIASES.md](docs/ALIASES.md) for the format. Aliases are labels only.
 - [docs/SETUP.md](docs/SETUP.md): longer setup guide
 - [CHANGELOG.md](CHANGELOG.md): release history
 
-## Not supported
+## Not supported (for now)
 
 - Direct/private messages
 - Human-language translation
