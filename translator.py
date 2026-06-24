@@ -1,434 +1,444 @@
+#!/usr/bin/env python3
 """
-Meshtastic ↔ MeshCore Protocol Translator
-Allows messages to be sent to both mesh clients from a central server.
+Mesh Verse MVP v2: public-channel Meshtastic <-> MeshCore bridge.
+
+What this version does:
+- forwards public text-channel messages in both directions;
+- uses the official high-level APIs of both Python libraries;
+- does NOT forward private/direct messages, position data, telemetry, files,
+  binary packets, or raw LoRa frames;
+- keeps a short duplicate cache to avoid simple bridge loops.
+
+Run with --dry-run first. It prints what would be forwarded without transmitting.
 """
 
+from __future__ import annotations
+
+import argparse
 import asyncio
+import hashlib
 import logging
-import struct
-from dataclasses import dataclass
-from typing import Dict, Optional, Callable
-from enum import IntEnum
+import time
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
-# Meshtastic imports
-import meshtastic
 import meshtastic.serial_interface
-from meshtastic.protobuf import mesh_pb2, portnums_pb2
+from meshcore import EventType, MeshCore
+from pubsub import pub
 
-# MeshCore imports
-from meshcore import MeshCore, EventType
+LOGGER = logging.getLogger("mesh_verse")
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-
-# ============================================================================
-# MESSAGE TYPE DEFINITIONS
-# ============================================================================
-
-class MeshCorePayloadType(IntEnum):
-    """MeshCore payload type constants"""
-    PAYLOAD_TYPE_REQ = 0
-    PAYLOAD_TYPE_TXT_MSG = 1
-    PAYLOAD_TYPE_ADVERT = 2
-    PAYLOAD_TYPE_PATH = 3
-    PAYLOAD_TYPE_ACK = 4
-    PAYLOAD_TYPE_CONTROL = 5
+# Meshtastic's broadcast node number. Keeping it local avoids depending on an
+# internal constant whose import path may move between library releases.
+BROADCAST_NODE_NUM = 0xFFFFFFFF
 
 
-class MeshCoreRouteType(IntEnum):
-    """MeshCore route type constants"""
-    ROUTE_FLOOD = 0
-    ROUTE_DIRECT = 1
-    ROUTE_TRANSPORT_FLOOD = 2
-    ROUTE_TRANSPORT_DIRECT = 3
+@dataclass(frozen=True)
+class BridgeConfig:
+    meshtastic_port: str
+    meshcore_port: str
+    meshtastic_channel: int
+    meshcore_channel: int
+    dedupe_seconds: int
+    max_text_chars: int
+    dry_run: bool
+    debug: bool
 
 
 @dataclass
-class TranslatedMessage:
-    """Standard message format for translation"""
-    source_id: int
-    dest_id: int
-    message_type: str  # 'text', 'position', 'telemetry', etc.
-    payload: bytes
-    text: Optional[str] = None
-    timestamp: int = 0
-    hop_limit: int = 3
+class DuplicateCache:
+    """Remember recently forwarded text long enough to stop obvious loops."""
 
-
-# ============================================================================
-# MESHTASTIC TO MESHCORE TRANSLATOR
-# ============================================================================
-
-class MeshtasticToMeshCore:
-    """Converts Meshtastic protobuf packets to MeshCore binary format"""
+    ttl_seconds: int
+    _entries: dict[tuple[str, str], float] = field(default_factory=dict)
 
     @staticmethod
-    def translate_packet(meshtastic_packet: Dict) -> Optional[bytes]:
-        """
-        Convert a Meshtastic packet dictionary to MeshCore binary format.
+    def _digest(text: str) -> str:
+        normalised = " ".join(text.strip().split())
+        return hashlib.sha256(normalised.encode("utf-8")).hexdigest()
 
-        Args:
-            meshtastic_packet: Dictionary representation of MeshPacket
+    def _prune(self) -> None:
+        cutoff = time.monotonic() - self.ttl_seconds
+        stale = [key for key, timestamp in self._entries.items() if timestamp < cutoff]
+        for key in stale:
+            del self._entries[key]
 
-        Returns:
-            MeshCore binary-encoded packet or None if unsupported
-        """
-        try:
-            source_id = meshtastic_packet.get("from", 0)
-            dest_id = meshtastic_packet.get("to", 0)
+    def was_sent_to(self, destination: str, text: str) -> bool:
+        self._prune()
+        return (destination, self._digest(text)) in self._entries
 
-            # Extract message content
-            decoded = meshtastic_packet.get("decoded", {})
-            portnum = decoded.get("portnum", "UNKNOWN_APP")
-
-            # Handle text messages
-            if portnum == "TEXT_MESSAGE_APP" or portnum == 1:
-                text = decoded.get("text", "")
-                return MeshtasticToMeshCore._build_meshcore_text_message(
-                    source_id, dest_id, text
-                )
-
-            # Handle position/telemetry data
-            elif portnum in ["POSITION_APP", "TELEMETRY_APP"] or portnum in [2, 67]:
-                payload = decoded.get("payload", b"")
-                return MeshtasticToMeshCore._build_meshcore_data_message(
-                    source_id, dest_id, payload
-                )
-
-            else:
-                logger.debug(f"Unsupported Meshtastic portnum: {portnum}")
-                return None
-
-        except Exception as e:
-            logger.error(f"Error translating Meshtastic packet: {e}")
-            return None
-
-    @staticmethod
-    def _build_meshcore_text_message(
-        source_id: int, dest_id: int, text: str
-    ) -> bytes:
-        """Build a MeshCore text message packet"""
-        # MeshCore header: VVPPPPRR
-        # Version=0, PayloadType=TEXT_MSG(1), RouteType=DIRECT(1)
-        header = 0x01  # 00_0001_01 = V:0, Type:1(TEXT), Route:1(DIRECT)
-
-        # Convert text to UTF-8 bytes
-        text_bytes = text.encode("utf-8")[:184]  # Max 184 bytes payload
-
-        # Build packet: [header][source][dest][payload_len][text]
-        packet = struct.pack(
-            "<BII", header, source_id, dest_id
-        ) + struct.pack("<B", len(text_bytes)) + text_bytes
-
-        return packet
-
-    @staticmethod
-    def _build_meshcore_data_message(
-        source_id: int, dest_id: int, payload: bytes
-    ) -> bytes:
-        """Build a MeshCore data message packet"""
-        # Header: Data message type
-        header = 0x05  # 00_0101_01 = V:0, Type:5(DATA), Route:1(DIRECT)
-
-        payload = payload[:184]  # Max 184 bytes
-
-        # Build packet
-        packet = struct.pack(
-            "<BII", header, source_id, dest_id
-        ) + struct.pack("<B", len(payload)) + payload
-
-        return packet
+    def remember_sent_to(self, destination: str, text: str) -> None:
+        self._prune()
+        self._entries[(destination, self._digest(text))] = time.monotonic()
 
 
-# ============================================================================
-# MESHCORE TO MESHTASTIC TRANSLATOR
-# ============================================================================
+def is_text_port(portnum: Any) -> bool:
+    """Accept both numeric and enum/string representations used by Meshtastic."""
+    if portnum == 1:
+        return True
+    return str(portnum).split(".")[-1] == "TEXT_MESSAGE_APP"
 
-class MeshCoreToMeshtastic:
-    """Converts MeshCore binary packets to Meshtastic protobuf format"""
 
-    @staticmethod
-    def parse_meshcore_packet(data: bytes) -> Optional[TranslatedMessage]:
-        """
-        Parse a MeshCore binary packet into a TranslatedMessage.
-
-        Args:
-            data: Raw MeshCore binary packet
-
-        Returns:
-            TranslatedMessage or None if parsing fails
-        """
-        try:
-            if len(data) < 10:
-                logger.warning("MeshCore packet too short")
-                return None
-
-            # Parse header byte: VVPPPPRR
-            header = data[0]
-            version = (header >> 6) & 0x3
-            payload_type = (header >> 2) & 0xF
-            route_type = header & 0x3
-
-            # Parse IDs (little-endian)
-            source_id = struct.unpack("<I", data[1:5])[0]
-            dest_id = struct.unpack("<I", data[5:9])[0]
-            payload_len = data[9]
-
-            if len(data) < 10 + payload_len:
-                logger.warning("MeshCore packet payload truncated")
-                return None
-
-            payload = data[10 : 10 + payload_len]
-
-            # Determine message type
-            message_type = "data"
-            text = None
-
-            if payload_type == MeshCorePayloadType.PAYLOAD_TYPE_TXT_MSG:
-                message_type = "text"
-                try:
-                    text = payload.decode("utf-8")
-                except UnicodeDecodeError:
-                    text = None
-
-            return TranslatedMessage(
-                source_id=source_id,
-                dest_id=dest_id,
-                message_type=message_type,
-                payload=payload,
-                text=text,
-            )
-
-        except Exception as e:
-            logger.error(f"Error parsing MeshCore packet: {e}")
-            return None
-
-    @staticmethod
-    def to_meshtastic_dict(msg: TranslatedMessage) -> Dict:
-        """Convert TranslatedMessage to Meshtastic packet dictionary"""
-        packet = {
-            "from": msg.source_id,
-            "to": msg.dest_id,
-            "decoded": {
-                "portnum": "TEXT_MESSAGE_APP" if msg.message_type == "text" else "DATA_PACKET",
-            },
+def is_broadcast(destination: Any) -> bool:
+    """Return True only for public/broadcast Meshtastic packets."""
+    if destination == BROADCAST_NODE_NUM or destination == -1:
+        return True
+    if isinstance(destination, str):
+        return destination.strip().lower() in {
+            "^all",
+            "all",
+            "broadcast",
+            "0xffffffff",
+            str(BROADCAST_NODE_NUM),
         }
-
-        if msg.text:
-            packet["decoded"]["text"] = msg.text
-        else:
-            packet["decoded"]["payload"] = msg.payload
-
-        return packet
+    return False
 
 
-# ============================================================================
-# DUAL-PROTOCOL GATEWAY SERVER
-# ============================================================================
+def clean_text(value: Any, max_chars: int) -> Optional[str]:
+    """Normalise text and apply a visible, safe length limit."""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
 
-class MeshGateway:
+    if not isinstance(value, str):
+        return None
+
+    text = value.replace("\x00", "").strip()
+    if not text:
+        return None
+
+    if len(text) > max_chars:
+        return text[: max_chars - 1] + "…"
+    return text
+
+
+class MeshVerseBridge:
     """
-    Bidirectional gateway that bridges Meshtastic and MeshCore networks.
-    Allows users to send messages to both mesh types from a single interface.
+    A deliberately narrow bridge.
+
+    Public channel text is the safe MVP. Direct messages need an explicit,
+    user-managed Meshtastic-node <-> MeshCore-contact mapping and should not be
+    guessed from unrelated node IDs or public-key prefixes.
     """
 
-    def __init__(
+    def __init__(self, config: BridgeConfig) -> None:
+        self.config = config
+        self.deduper = DuplicateCache(config.dedupe_seconds)
+
+        self.meshtastic_iface: Optional[Any] = None
+        self.meshcore: Optional[MeshCore] = None
+
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._meshtastic_callback: Optional[Any] = None
+        self._meshcore_subscriptions: list[Any] = []
+        self._closed = False
+
+    async def connect(self) -> None:
+        """Open both serial connections and register listeners."""
+        self._loop = asyncio.get_running_loop()
+
+        LOGGER.info("Connecting to Meshtastic on %s", self.config.meshtastic_port)
+        self.meshtastic_iface = meshtastic.serial_interface.SerialInterface(
+            devPath=self.config.meshtastic_port
+        )
+
+        LOGGER.info("Connecting to MeshCore on %s", self.config.meshcore_port)
+        self.meshcore = await MeshCore.create_serial(
+            self.config.meshcore_port,
+            debug=self.config.debug,
+        )
+
+        # MeshCore queues incoming messages on the companion. This enables the
+        # library's documented automatic fetching of those queued messages.
+        await self.meshcore.start_auto_message_fetching()
+
+        self._setup_meshtastic_listener()
+        self._setup_meshcore_listener()
+
+        LOGGER.info(
+            "Bridge online: Meshtastic channel %d <-> MeshCore channel %d",
+            self.config.meshtastic_channel,
+            self.config.meshcore_channel,
+        )
+
+    def _setup_meshtastic_listener(self) -> None:
+        self._meshtastic_callback = self._on_meshtastic_pubsub
+        pub.subscribe(self._meshtastic_callback, "meshtastic.receive.text")
+        LOGGER.info("Meshtastic public-text listener enabled")
+
+    def _setup_meshcore_listener(self) -> None:
+        if self.meshcore is None:
+            raise RuntimeError("MeshCore is not connected")
+
+        subscription = self.meshcore.subscribe(
+            EventType.CHANNEL_MSG_RECV,
+            self._on_meshcore_channel_message,
+        )
+        self._meshcore_subscriptions.append(subscription)
+        LOGGER.info("MeshCore public-channel listener enabled")
+
+    def _on_meshtastic_pubsub(
         self,
-        meshtastic_port: str = "/dev/ttyUSB0",
-        meshcore_serial_port: str = "/dev/ttyUSB1",
-    ):
+        packet: dict[str, Any],
+        interface: Any = None,
+    ) -> None:
         """
-        Initialize the gateway.
-
-        Args:
-            meshtastic_port: Serial port for Meshtastic device
-            meshcore_serial_port: Serial port for MeshCore device
+        PubSub callbacks may arrive from a non-async thread, so hand work to
+        the bridge event loop safely instead of calling asyncio.create_task().
         """
-        self.meshtastic_port = meshtastic_port
-        self.meshcore_serial_port = meshcore_serial_port
-
-        self.meshtastic_iface = None
-        self.meshcore = None
-
-        # Message routing callbacks
-        self.on_meshtastic_message: Optional[Callable] = None
-        self.on_meshcore_message: Optional[Callable] = None
-
-    async def connect(self) -> bool:
-        """Connect to both mesh networks"""
-        try:
-            # Connect to Meshtastic
-            logger.info(f"Connecting to Meshtastic on {self.meshtastic_port}...")
-            self.meshtastic_iface = meshtastic.serial_interface.SerialInterface(
-                devPath=self.meshtastic_port
-            )
-            logger.info("Meshtastic connected")
-
-            # Connect to MeshCore
-            logger.info(f"Connecting to MeshCore on {self.meshcore_serial_port}...")
-            self.meshcore = await MeshCore.create_serial(self.meshcore_serial_port)
-            logger.info("MeshCore connected")
-
-            # Subscribe to message events
-            self._setup_meshtastic_listeners()
-            await self._setup_meshcore_listeners()
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Connection failed: {e}")
-            return False
-
-    def _setup_meshtastic_listeners(self):
-        """Set up Meshtastic message listeners"""
-        from pubsub import pub
-
-        def on_meshtastic_receive(packet):
-            """Handle incoming Meshtastic message"""
-            asyncio.create_task(self._handle_meshtastic_message(packet))
-
-        pub.subscribe(on_meshtastic_receive, "meshtastic.receive.text")
-        logger.info("Meshtastic listeners configured")
-
-    async def _setup_meshcore_listeners(self):
-        """Set up MeshCore message listeners"""
-        # Subscribe to MeshCore text messages
-        # (Implementation depends on MeshCore async API)
-        logger.info("MeshCore listeners configured")
-
-    async def _handle_meshtastic_message(self, packet: Dict):
-        """
-        Handle a message received from Meshtastic.
-        Forward to MeshCore if configured.
-        """
-        logger.info(f"Meshtastic message from {packet.get('from')}: {packet}")
-
-        # Translate to MeshCore
-        meshcore_packet = MeshtasticToMeshCore.translate_packet(packet)
-        if meshcore_packet and self.meshcore:
-            try:
-                await self.meshcore.commands.send_raw(meshcore_packet)
-                logger.info(f"Forwarded to MeshCore: {len(meshcore_packet)} bytes")
-            except Exception as e:
-                logger.error(f"Failed to forward to MeshCore: {e}")
-
-        # Trigger callback
-        if self.on_meshtastic_message:
-            self.on_meshtastic_message(packet)
-
-    async def _handle_meshcore_message(self, data: bytes):
-        """
-        Handle a message received from MeshCore.
-        Forward to Meshtastic if configured.
-        """
-        msg = MeshCoreToMeshtastic.parse_meshcore_packet(data)
-        if not msg:
+        if self._loop is None or self._loop.is_closed() or self._closed:
             return
 
-        logger.info(f"MeshCore message from {msg.source_id}: {msg.text or msg.payload}")
+        future = asyncio.run_coroutine_threadsafe(
+            self._handle_meshtastic_packet(packet),
+            self._loop,
+        )
+        future.add_done_callback(self._report_background_error)
 
-        # Translate to Meshtastic
-        meshtastic_packet = MeshCoreToMeshtastic.to_meshtastic_dict(msg)
+    @staticmethod
+    def _report_background_error(future: Any) -> None:
+        try:
+            future.result()
+        except Exception:
+            LOGGER.exception("Unhandled Meshtastic callback error")
 
-        if self.meshtastic_iface:
-            try:
-                if msg.text:
-                    self.meshtastic_iface.sendText(
-                        msg.text,
-                        destinationId=msg.dest_id,
-                        wantAck=True,
-                    )
-                else:
-                    self.meshtastic_iface.sendData(
-                        msg.payload,
-                        destinationId=msg.dest_id,
-                        wantAck=True,
-                    )
-                logger.info(f"Forwarded to Meshtastic: to {msg.dest_id}")
-            except Exception as e:
-                logger.error(f"Failed to forward to Meshtastic: {e}")
-
-        # Trigger callback
-        if self.on_meshcore_message:
-            self.on_meshcore_message(meshtastic_packet)
-
-    async def send_to_both(
+    def _extract_meshtastic_public_text(
         self,
-        message: str,
-        dest_id: int,
-        meshtastic_enabled: bool = True,
-        meshcore_enabled: bool = True,
-    ):
-        """
-        Send a message to both networks simultaneously.
+        packet: dict[str, Any],
+    ) -> Optional[str]:
+        decoded = packet.get("decoded") or {}
 
-        Args:
-            message: Text message to send
-            dest_id: Destination node ID
-            meshtastic_enabled: Whether to send via Meshtastic
-            meshcore_enabled: Whether to send via MeshCore
-        """
-        if meshtastic_enabled and self.meshtastic_iface:
-            try:
-                self.meshtastic_iface.sendText(message, destinationId=dest_id)
-                logger.info(f"Sent to Meshtastic: {dest_id} - {message}")
-            except Exception as e:
-                logger.error(f"Failed to send via Meshtastic: {e}")
-
-        if meshcore_enabled and self.meshcore:
-            try:
-                meshcore_packet = MeshtasticToMeshCore._build_meshcore_text_message(
-                    0, dest_id, message
-                )
-                await self.meshcore.commands.send_raw(meshcore_packet)
-                logger.info(f"Sent to MeshCore: {dest_id} - {message}")
-            except Exception as e:
-                logger.error(f"Failed to send via MeshCore: {e}")
-
-    async def close(self):
-        """Close all connections"""
-        if self.meshtastic_iface:
-            self.meshtastic_iface.close()
-        if self.meshcore:
-            await self.meshcore.disconnect()
-        logger.info("Gateway closed")
-
-
-# ============================================================================
-# EXAMPLE USAGE
-# ============================================================================
-
-async def main():
-    """Example: Start the dual-network gateway"""
-    gateway = MeshGateway(
-        meshtastic_port="/dev/ttyUSB0",
-        meshcore_serial_port="/dev/ttyUSB1",
-    )
-
-    if await gateway.connect():
-        logger.info("Gateway online and bridging both networks")
+        if not is_text_port(decoded.get("portnum")):
+            return None
 
         try:
-            # Example: Send a message to both networks
-            await gateway.send_to_both(
-                message="Hello from translator!",
-                dest_id=12345,
-                meshtastic_enabled=True,
-                meshcore_enabled=True,
+            packet_channel = int(packet.get("channel", 0))
+        except (TypeError, ValueError):
+            return None
+
+        if packet_channel != self.config.meshtastic_channel:
+            return None
+
+        # Do not leak DMs into another network. Missing/unknown destinations
+        # are treated as private instead of making an optimistic guess.
+        if not is_broadcast(packet.get("to")):
+            return None
+
+        return clean_text(decoded.get("text"), self.config.max_text_chars)
+
+    async def _handle_meshtastic_packet(self, packet: dict[str, Any]) -> None:
+        text = self._extract_meshtastic_public_text(packet)
+        if text is None:
+            return
+
+        if self.deduper.was_sent_to("meshcore", text):
+            LOGGER.debug("Dropped Meshtastic echo: %r", text)
+            return
+
+        source = packet.get("fromId") or packet.get("from") or "unknown"
+        LOGGER.info("Meshtastic -> MeshCore from %s: %s", source, text)
+
+        if self.config.dry_run:
+            LOGGER.info("[dry-run] Would send to MeshCore channel %d", self.config.meshcore_channel)
+            self.deduper.remember_sent_to("meshcore", text)
+            return
+
+        if self.meshcore is None:
+            LOGGER.warning("MeshCore is disconnected; message was not forwarded")
+            return
+
+        result = await self.meshcore.commands.send_chan_msg(
+            self.config.meshcore_channel,
+            text,
+        )
+        if result.type == EventType.ERROR:
+            LOGGER.error("MeshCore rejected message: %s", result.payload)
+            return
+
+        self.deduper.remember_sent_to("meshcore", text)
+        LOGGER.info("Forwarded to MeshCore successfully")
+
+    async def _on_meshcore_channel_message(self, event: Any) -> None:
+        """Handle the documented MeshCore CHANNEL_MSG_RECV event."""
+        payload = getattr(event, "payload", None)
+        if not isinstance(payload, dict):
+            LOGGER.debug("Ignoring MeshCore event with unexpected payload: %r", payload)
+            return
+
+        try:
+            channel_index = int(payload.get("channel_idx", -1))
+        except (TypeError, ValueError):
+            return
+
+        if channel_index != self.config.meshcore_channel:
+            return
+
+        text = clean_text(payload.get("text"), self.config.max_text_chars)
+        if text is None:
+            return
+
+        if self.deduper.was_sent_to("meshtastic", text):
+            LOGGER.debug("Dropped MeshCore echo: %r", text)
+            return
+
+        source = payload.get("pubkey_prefix", "unknown")
+        LOGGER.info("MeshCore -> Meshtastic from %s: %s", source, text)
+
+        if self.config.dry_run:
+            LOGGER.info(
+                "[dry-run] Would send to Meshtastic channel %d",
+                self.config.meshtastic_channel,
             )
+            self.deduper.remember_sent_to("meshtastic", text)
+            return
 
-            # Keep running
-            while True:
-                await asyncio.sleep(1)
+        if self.meshtastic_iface is None:
+            LOGGER.warning("Meshtastic is disconnected; message was not forwarded")
+            return
 
-        except KeyboardInterrupt:
-            logger.info("Shutdown requested")
-        finally:
-            await gateway.close()
-    else:
-        logger.error("Failed to connect to mesh networks")
+        # Broadcast only. Public channel traffic must not silently become a DM.
+        self.meshtastic_iface.sendText(
+            text,
+            destinationId="^all",
+            wantAck=False,
+            channelIndex=self.config.meshtastic_channel,
+        )
+
+        self.deduper.remember_sent_to("meshtastic", text)
+        LOGGER.info("Forwarded to Meshtastic successfully")
+
+    async def close(self) -> None:
+        """Unsubscribe and close hardware connections cleanly."""
+        if self._closed:
+            return
+        self._closed = True
+
+        if self._meshtastic_callback is not None:
+            try:
+                pub.unsubscribe(self._meshtastic_callback, "meshtastic.receive.text")
+            except Exception:
+                LOGGER.debug("Meshtastic callback was already unsubscribed")
+
+        if self.meshcore is not None:
+            for subscription in self._meshcore_subscriptions:
+                try:
+                    self.meshcore.unsubscribe(subscription)
+                except Exception:
+                    LOGGER.debug("MeshCore subscription was already removed")
+
+            try:
+                await self.meshcore.stop_auto_message_fetching()
+            except Exception:
+                LOGGER.debug("MeshCore auto-fetcher was already stopped")
+
+            try:
+                await self.meshcore.disconnect()
+            except Exception:
+                LOGGER.exception("MeshCore disconnect failed")
+
+        if self.meshtastic_iface is not None:
+            try:
+                self.meshtastic_iface.close()
+            except Exception:
+                LOGGER.exception("Meshtastic disconnect failed")
+
+        LOGGER.info("Bridge closed")
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Mesh Verse public-channel Meshtastic <-> MeshCore bridge."
+    )
+    parser.add_argument(
+        "--meshtastic-port",
+        required=True,
+        help="Serial device for the Meshtastic radio, e.g. /dev/ttyACM0",
+    )
+    parser.add_argument(
+        "--meshcore-port",
+        required=True,
+        help="Serial device for the MeshCore companion, e.g. /dev/ttyUSB0",
+    )
+    parser.add_argument(
+        "--meshtastic-channel",
+        type=int,
+        default=0,
+        help="Public Meshtastic channel index to bridge (default: 0)",
+    )
+    parser.add_argument(
+        "--meshcore-channel",
+        type=int,
+        default=0,
+        help="Public MeshCore channel index to bridge (default: 0)",
+    )
+    parser.add_argument(
+        "--dedupe-seconds",
+        type=int,
+        default=120,
+        help="Seconds to remember forwarded text and suppress loop echoes (default: 120)",
+    )
+    parser.add_argument(
+        "--max-text-chars",
+        type=int,
+        default=180,
+        help="Maximum forwarded text length; longer messages are visibly truncated (default: 180)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Log forwarding decisions but never transmit anything",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable detailed library logging",
+    )
+
+    args = parser.parse_args()
+
+    if args.meshtastic_channel < 0 or args.meshcore_channel < 0:
+        parser.error("Channel indices cannot be negative.")
+    if args.dedupe_seconds < 1:
+        parser.error("--dedupe-seconds must be at least 1.")
+    if args.max_text_chars < 2:
+        parser.error("--max-text-chars must be at least 2.")
+
+    return args
+
+
+async def run_bridge(args: argparse.Namespace) -> None:
+    config = BridgeConfig(
+        meshtastic_port=args.meshtastic_port,
+        meshcore_port=args.meshcore_port,
+        meshtastic_channel=args.meshtastic_channel,
+        meshcore_channel=args.meshcore_channel,
+        dedupe_seconds=args.dedupe_seconds,
+        max_text_chars=args.max_text_chars,
+        dry_run=args.dry_run,
+        debug=args.debug,
+    )
+    bridge = MeshVerseBridge(config)
+
+    try:
+        await bridge.connect()
+        LOGGER.info("Listening. Stop with Ctrl+C.")
+        while True:
+            await asyncio.sleep(3600)
+    finally:
+        await bridge.close()
+
+
+def main() -> None:
+    args = parse_args()
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    )
+
+    try:
+        asyncio.run(run_bridge(args))
+    except KeyboardInterrupt:
+        LOGGER.info("Shutdown requested by user")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
