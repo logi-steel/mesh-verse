@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Mesh Verse MVP v2: public-channel Meshtastic <-> MeshCore bridge.
+Mesh Verse MVP v2.1: public-channel Meshtastic <-> MeshCore bridge.
 
 What this version does:
 - forwards public text-channel messages in both directions;
-- uses the official high-level APIs of both Python libraries;
+- uses the high-level Python APIs of both projects;
 - does NOT forward private/direct messages, position data, telemetry, files,
   binary packets, or raw LoRa frames;
 - keeps a short duplicate cache to avoid simple bridge loops.
@@ -28,7 +28,7 @@ from pubsub import pub
 
 LOGGER = logging.getLogger("mesh_verse")
 
-# Meshtastic's broadcast node number. Keeping it local avoids depending on an
+# Meshtastic broadcast node number. Keeping it local avoids depending on an
 # internal constant whose import path may move between library releases.
 BROADCAST_NODE_NUM = 0xFFFFFFFF
 
@@ -59,7 +59,11 @@ class DuplicateCache:
 
     def _prune(self) -> None:
         cutoff = time.monotonic() - self.ttl_seconds
-        stale = [key for key, timestamp in self._entries.items() if timestamp < cutoff]
+        stale = [
+            key
+            for key, timestamp in self._entries.items()
+            if timestamp < cutoff
+        ]
         for key in stale:
             del self._entries[key]
 
@@ -83,14 +87,17 @@ def is_broadcast(destination: Any) -> bool:
     """Return True only for public/broadcast Meshtastic packets."""
     if destination == BROADCAST_NODE_NUM or destination == -1:
         return True
+
     if isinstance(destination, str):
         return destination.strip().lower() in {
             "^all",
             "all",
             "broadcast",
             "0xffffffff",
+            "!ffffffff",
             str(BROADCAST_NODE_NUM),
         }
+
     return False
 
 
@@ -108,7 +115,20 @@ def clean_text(value: Any, max_chars: int) -> Optional[str]:
 
     if len(text) > max_chars:
         return text[: max_chars - 1] + "…"
+
     return text
+
+
+def get_int_from_payload(payload: dict[str, Any], *names: str, default: int = -1) -> int:
+    """Get an int from possible MeshCore payload field names."""
+    for name in names:
+        if name not in payload:
+            continue
+        try:
+            return int(payload[name])
+        except (TypeError, ValueError):
+            continue
+    return default
 
 
 class MeshVerseBridge:
@@ -138,7 +158,7 @@ class MeshVerseBridge:
 
         LOGGER.info("Connecting to Meshtastic on %s", self.config.meshtastic_port)
         self.meshtastic_iface = meshtastic.serial_interface.SerialInterface(
-            devPath=self.config.meshtastic_port
+            devPath=self.config.meshtastic_port,
         )
 
         LOGGER.info("Connecting to MeshCore on %s", self.config.meshcore_port)
@@ -230,7 +250,9 @@ class MeshVerseBridge:
         if text is None:
             return
 
-        if self.deduper.was_sent_to("meshcore", text):
+        # FIX: If this same text was recently sent *to Meshtastic* by the
+        # bridge, a Meshtastic receive event may be our own echo. Drop it.
+        if self.deduper.was_sent_to("meshtastic", text):
             LOGGER.debug("Dropped Meshtastic echo: %r", text)
             return
 
@@ -238,7 +260,10 @@ class MeshVerseBridge:
         LOGGER.info("Meshtastic -> MeshCore from %s: %s", source, text)
 
         if self.config.dry_run:
-            LOGGER.info("[dry-run] Would send to MeshCore channel %d", self.config.meshcore_channel)
+            LOGGER.info(
+                "[dry-run] Would send to MeshCore channel %d",
+                self.config.meshcore_channel,
+            )
             self.deduper.remember_sent_to("meshcore", text)
             return
 
@@ -264,11 +289,13 @@ class MeshVerseBridge:
             LOGGER.debug("Ignoring MeshCore event with unexpected payload: %r", payload)
             return
 
-        try:
-            channel_index = int(payload.get("channel_idx", -1))
-        except (TypeError, ValueError):
-            return
-
+        channel_index = get_int_from_payload(
+            payload,
+            "channel_idx",
+            "channel",
+            "chan",
+            default=-1,
+        )
         if channel_index != self.config.meshcore_channel:
             return
 
@@ -276,7 +303,9 @@ class MeshVerseBridge:
         if text is None:
             return
 
-        if self.deduper.was_sent_to("meshtastic", text):
+        # FIX: If this same text was recently sent *to MeshCore* by the bridge,
+        # a MeshCore channel event may be our own echo. Drop it.
+        if self.deduper.was_sent_to("meshcore", text):
             LOGGER.debug("Dropped MeshCore echo: %r", text)
             return
 
@@ -346,7 +375,7 @@ class MeshVerseBridge:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Mesh Verse public-channel Meshtastic <-> MeshCore bridge."
+        description="Mesh Verse public-channel Meshtastic <-> MeshCore bridge.",
     )
     parser.add_argument(
         "--meshtastic-port",
