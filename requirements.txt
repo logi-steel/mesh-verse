@@ -1,4 +1,4 @@
-meshtastic>=2.2.0
-meshcore>=0.1.0
+# Python 3.10+ required because current MeshCore Python supports Python >=3.10.
+meshtastic>=2.7.0,<3.0
+meshcore>=2.3.7,<3.0
 pypubsub>=4.0.3
-protobuf>=3.20.0
