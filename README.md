@@ -4,11 +4,12 @@
 
 Mesh Verse is a deliberately narrow bridge between a **Meshtastic public text channel** and a **MeshCore public text channel**.
 
-**New to the project?** Start with the [First Real Setup guide](docs/SETUP.md). It explains the required two-radio architecture, controlled testing, and MacBook/Raspberry Pi setup.
+**New to the project?** Start with the [First Real Setup guide](docs/SETUP.md). It explains the required two-radio architecture, controlled testing, and MacBook/Raspberry Pi setup. For display aliases, read [Alias guide](docs/ALIASES.md).
 
 ## What it does
 
 - forwards public text-channel messages in both directions;
+- prefixes relayed text with a stable local alias such as `[MT-ALFA]` or `[MC-BRAVO]` instead of forwarding an original display name;
 - keeps a short duplicate cache to reduce simple bridge loops;
 - lets you choose a channel index on each side;
 - has a dry-run mode that logs decisions without transmitting;
@@ -18,8 +19,9 @@ Mesh Verse is a deliberately narrow bridge between a **Meshtastic public text ch
 
 - direct/private messages;
 - position data, telemetry, files, binary packets, or raw LoRa frames;
-- automatic contact matching between networks;
-- radio configuration, firmware flashing, or frequency changes.
+- automatic contact matching or direct-message routing between networks;
+- radio configuration, firmware flashing, or frequency changes;
+- identity verification. A relay alias is a label, not proof of who typed a message.
 
 That limitation is intentional. A bridge should not quietly turn private traffic into public traffic because someone thought “it will probably be fine.” Humanity already has enough of those decisions.
 
@@ -82,6 +84,29 @@ python translator.py \
 
 Dry-run prints what the bridge would forward but never sends a packet. Confirm that only the expected public-channel text is detected before using the real bridge.
 
+## Pseudonymous relay aliases
+
+Without an alias file, Mesh Verse derives deterministic aliases from the sender's local network identifier, for example `[MT-8F12AB]` or `[MC-90CDEF]`. The same source keeps the same fallback alias after a restart.
+
+To choose friendlier local labels, create an ignored local config file from the example:
+
+```bash
+cp bridge_aliases.example.json bridge_aliases.json
+```
+
+Edit only the local `bridge_aliases.json`, then add it to the bridge command:
+
+```bash
+python translator.py \
+  --meshtastic-port /dev/serial/by-id/your-meshtastic-radio \
+  --meshcore-port /dev/serial/by-id/your-meshcore-radio \
+  --alias-file bridge_aliases.json \
+  --dry-run \
+  --debug
+```
+
+The alias map uses source identifiers, not human display names. It controls what label crosses the bridge, but it does **not** provide private routing or cryptographic identity verification. See [docs/ALIASES.md](docs/ALIASES.md) for the format and examples.
+
 ## Live bridge
 
 Remove `--dry-run` only after the preflight run looks correct:
@@ -91,7 +116,8 @@ python translator.py \
   --meshtastic-port /dev/serial/by-id/your-meshtastic-radio \
   --meshcore-port /dev/serial/by-id/your-meshcore-radio \
   --meshtastic-channel 0 \
-  --meshcore-channel 0
+  --meshcore-channel 0 \
+  --alias-file bridge_aliases.json
 ```
 
 Stop it with `Ctrl+C`.
@@ -105,13 +131,14 @@ Stop it with `Ctrl+C`.
 | `--meshtastic-channel` | `0` | Meshtastic public channel index |
 | `--meshcore-channel` | `0` | MeshCore public channel index |
 | `--dedupe-seconds` | `120` | Time window used to suppress loop echoes |
-| `--max-text-chars` | `180` | Maximum forwarded message length |
+| `--max-text-chars` | `180` | Maximum forwarded text length, including alias prefix |
+| `--alias-file` | off | Optional local JSON map of source IDs to friendly aliases |
 | `--dry-run` | off | Log actions without transmitting |
 | `--debug` | off | Enable detailed logging |
 
 ## Tests
 
-Python tests do not require radios. They test text filtering, broadcast detection, deduplication, and the public-only packet filter.
+Python tests do not require radios. They test text filtering, broadcast detection, deduplication, alias formatting, and the public-only packet filter.
 
 ```bash
 python -m unittest discover -s tests -v
@@ -148,8 +175,9 @@ The service template expects a checked-out repository and virtual environment at
 
 - Keep this bridge on public channels only.
 - Do not use it to relay private conversations without explicit consent from everyone involved.
+- A bridge alias is a readable pseudonym, not a verified legal identity.
 - Back up your configurations before changing radio firmware or settings.
-- Start with `--dry-run` every time the hardware, port paths, or channel layout changes.
+- Start with `--dry-run` every time the hardware, port paths, channel layout, or alias map changes.
 
 ## Project direction
 
