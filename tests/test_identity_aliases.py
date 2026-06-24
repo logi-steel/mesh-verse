@@ -61,7 +61,7 @@ class AliasRegistryTests(unittest.TestCase):
 class RelayTextTests(unittest.TestCase):
     def test_envelope_prefixes_and_truncates_within_limit(self) -> None:
         self.assertEqual(format_relay_text("MT-ALFA", "hello", 32), "[MV/MT-ALFA] hello")
-        self.assertEqual(format_relay_text("MT-ALFA", "abcdefghij", 18), "[MV/MT-ALFA] abc…")
+        self.assertEqual(format_relay_text("MT-ALFA", "abcdefghij", 18), "[MV/MT-ALFA] abcd…")
 
     def test_relay_envelope_detection_is_explicit(self) -> None:
         self.assertTrue(is_relay_text("[MV/MT-ALFA] hello"))
