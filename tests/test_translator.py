@@ -11,6 +11,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_NAME = "meshverse_translator_under_test"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 
 def install_dependency_stubs() -> None:
@@ -133,6 +135,15 @@ class PublicPacketFilterTests(unittest.TestCase):
         self.assertIsNone(self.bridge._extract_meshtastic_public_text(private_packet))
         self.assertIsNone(self.bridge._extract_meshtastic_public_text(telemetry_packet))
         self.assertIsNone(self.bridge._extract_meshtastic_public_text(other_channel_packet))
+
+    def test_relay_text_uses_stable_network_specific_alias(self) -> None:
+        alias, message = self.bridge._relay_text("meshtastic", "!A1B2C3D4", "hello")
+        self.assertTrue(alias.startswith("MT-"))
+        self.assertEqual(message, f"[{alias}] hello")
+
+        meshcore_alias, _ = self.bridge._relay_text("meshcore", "a1b2c3d4", "hello")
+        self.assertTrue(meshcore_alias.startswith("MC-"))
+        self.assertNotEqual(alias, meshcore_alias)
 
 
 if __name__ == "__main__":
