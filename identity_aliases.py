@@ -1,4 +1,4 @@
-"""Pseudonymous source aliases for Mesh Verse public relay messages.
+"""Pseudonymous source aliases and loop-safe relay envelopes for Mesh Verse.
 
 Aliases are local display labels. They are not authentication and they do not
 create direct-message routes between Meshtastic and MeshCore.
@@ -18,8 +18,9 @@ NETWORK_PREFIXES = {
     "meshtastic": "MT",
     "meshcore": "MC",
 }
-
+RELAY_NAME = "MV"
 _ALIAS_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,24}$")
+_RELAY_PATTERN = re.compile(r"^\[MV/[A-Za-z0-9_-]{1,24}\](?:\s|$)")
 
 
 class AliasConfigurationError(ValueError):
@@ -125,21 +126,31 @@ class AliasRegistry:
         return f"{NETWORK_PREFIXES[network]}-{digest}"
 
 
-def format_relay_text(alias: str, text: str, max_chars: int) -> str:
-    """Prefix relayed public text with an alias without exceeding its size limit."""
-    if max_chars < 2:
-        raise ValueError("max_chars must be at least 2")
+def is_relay_text(value: Any) -> bool:
+    """Return True for text that already carries a Mesh Verse relay envelope.
 
+    This prevents a second bridge from forwarding an already relayed packet back
+    across the other network after a reboot or outside the short dedupe window.
+    The envelope is visible by design, because invisible markers are frequently
+    stripped or rendered inconsistently by radio clients.
+    """
+    return isinstance(value, str) and _RELAY_PATTERN.match(value.strip()) is not None
+
+
+def format_relay_text(alias: str, text: str, max_chars: int) -> str:
+    """Envelope relayed public text without exceeding its configured size limit."""
     safe_alias = AliasRegistry.validate_alias(alias)
-    prefix = f"[{safe_alias}] "
+    prefix = f"[{RELAY_NAME}/{safe_alias}] "
+    if max_chars < len(prefix) + 1:
+        raise ValueError(
+            f"max_chars must be at least {len(prefix) + 1} for alias {safe_alias!r}."
+        )
+
     message = prefix + text
     if len(message) <= max_chars:
         return message
 
     remaining = max_chars - len(prefix)
-    if remaining <= 0:
-        return prefix[:max_chars]
     if remaining == 1:
         return prefix + "…"
-
     return prefix + text[: remaining - 1].rstrip() + "…"
