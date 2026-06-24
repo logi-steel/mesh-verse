@@ -130,3 +130,32 @@ The tests use fake radios. They check program logic, not real radio range or eve
 ## License
 
 GNU GPL v3. See [LICENSE](LICENSE).
+
+##SELF-HOSTING (how to do it and is it worth it) (it is not)
+#What is it 
+self hosting a mesh-verse is not that big of a problem
+you need 
+**A Raspberry pi (the recomended version for medium usage is pi4 4gb ) and up to newest verison** 
+**2 nodes wich one will be operating in meshcore and the second on meshtastic** 
+**A usb cable to connect the nodes to raspberry pi** 
+**antenas to both radios (you can buy all in one radio with antena like the T-Echo from LILY-GO) for the connection to work**
+**stable power (or working with power bank but this is a lottery wich compuetrs like raspberry pi dont like)**
+**FOR CLARITY you can use whatever computer you like. but it must have enought powwer. but you can run it on literaly potato pc (if 2gb ram and 2 cores are potato pc then yes)**
+
+#Firmware 
+for the potato you need
+my (not realy mine) program 
+on 1 node instal meshtastic (https://github.com/Xinyuan-LilyGO/T-Echo/blob/main/firmware/README.MD)
+on second instal meshcore (https://nodakmesh.org/meshcore/setup) 
+and on potato 
+linux| macos| windows (MacOS isn't testes yet so take it as "its unix it works the same")
+#REMEMBER TO BACKUP ANYTHING ON YOUR DEVICES BEFORE DOING THIS !!!
+
+
+#CANAL 
+Make one chanell on the meshtastic side 
+And one on the meshcore side
+name them similary so you can see your own chanell 
+The only tech limitation currently is that you can't send dm's 
+
+
