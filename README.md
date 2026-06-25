@@ -6,7 +6,7 @@ IN LATER RELEASES IT WILL BE MADE BY ME
 
 # Back to main 
 
-> **v0.1.0, experimental.** A small bridge that copies public text between one Meshtastic channel and one MeshCore channel.
+> **v0.1.2, experimental.** A small bridge that copies public text between one Meshtastic channel and one MeshCore channel.
 
 ```text
 Meshtastic users
@@ -176,7 +176,5 @@ And one on the MeshCore side
 name them similarly so you can see your own channel 
 
 The only tech limitation currently is that you can't send dm's 
-
-
 
 
