@@ -132,9 +132,13 @@ The tests use fake radios. They check program logic, not real radio range or eve
 GNU GPL v3. See [LICENSE](LICENSE).
 
 ## SELF-HOSTING (how to do it and is it worth it) (it is not)
-# What is it 
+
+# What is it
+
 self hosting a mesh-verse is not that big of a problem
-you need 
+
+you need
+
 **A Raspberry pi (the recomended version for medium usage is pi4 4gb ) and up to newest verison**
 
 **2 nodes wich one will be operating in meshcore and the second on meshtastic**
@@ -150,18 +154,28 @@ you need
 
 # Firmware 
 for the potato you need
+
 my (not realy mine) program 
+
 on 1 node instal meshtastic (https://github.com/Xinyuan-LilyGO/T-Echo/blob/main/firmware/README.MD)
+
 on second instal meshcore (https://nodakmesh.org/meshcore/setup) 
+
 and on potato 
 linux| macos| windows (MacOS isn't testes yet so take it as "its unix it works the same")
+
 #REMEMBER TO BACKUP ANYTHING ON YOUR DEVICES BEFORE DOING THIS !!!
 
 
 # CANAL 
+
 Make one chanell on the meshtastic side 
+
 And one on the meshcore side
+
 name them similary so you can see your own chanell 
+
 The only tech limitation currently is that you can't send dm's 
+
 
 
