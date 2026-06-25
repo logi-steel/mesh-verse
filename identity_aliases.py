@@ -29,6 +29,7 @@ class AliasConfigurationError(ValueError):
 
 @dataclass
 class AliasRegistry:
+    """Resolve stable, pseudonymous display labels from network source identifiers."""
     """Resolve stable, local aliases from network source identifiers."""
 
     aliases: dict[str, dict[str, str]] = field(
@@ -93,6 +94,7 @@ class AliasRegistry:
 
     @staticmethod
     def normalise_source(value: Any) -> str:
+        """Normalize source ID to lowercase string for consistent lookup."""
         source = str(value).strip().lower()
         if not source:
             raise AliasConfigurationError("Alias source identifiers cannot be empty.")
@@ -100,6 +102,7 @@ class AliasRegistry:
 
     @staticmethod
     def validate_alias(value: Any) -> str:
+        """Reject aliases that don't match the safe display pattern: 1-24 alphanumeric, dash, underscore."""
         if not isinstance(value, str):
             raise AliasConfigurationError("Every alias must be a string.")
 

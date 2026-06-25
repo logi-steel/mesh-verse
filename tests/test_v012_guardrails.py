@@ -55,7 +55,7 @@ class GuardrailUnitTests(unittest.TestCase):
 
             payload = json.loads(status_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["schema_version"], 1)
-            self.assertEqual(payload["version"], "0.1.2")
+            self.assertEqual(payload["version"], "0.1.3")
             self.assertEqual(payload["state"], "online")
             self.assertEqual(payload["stats"]["forwarded_mt_to_mc"], 3)
             self.assertEqual(payload["stats"]["dropped_rate_limited"], 2)

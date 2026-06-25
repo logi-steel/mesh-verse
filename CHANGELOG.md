@@ -2,6 +2,15 @@
 
 All notable changes to Mesh Verse are documented here.
 
+## [0.1.3] - 2026-06-25
+
+### Fixed
+
+- Eliminated duplicate bridge initialization on normal startup (now only occurs with `--check-config`). Alias file is now read once instead of twice.
+- Fixed typos in README and documentation.
+- Added docstrings to key bridge classes and methods for better code clarity.
+- Removed stray debug file from repository.
+
 ## [0.1.2] - 2026-06-25
 
 ### Added

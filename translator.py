@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mesh Verse v0.1.2 public-channel Meshtastic <-> MeshCore bridge.
+"""Mesh Verse v0.1.3 public-channel Meshtastic <-> MeshCore bridge.
 
 The bridge copies text from one selected public channel to another selected public
 channel. It never forwards direct messages, telemetry, positions, files, binary
@@ -42,6 +42,7 @@ STATUS_SCHEMA_VERSION = 1
 
 @dataclass(frozen=True)
 class BridgeConfig:
+    """Immutable bridge configuration from command-line arguments."""
     meshtastic_port: str
     meshcore_port: str
     meshtastic_channel: int
@@ -72,6 +73,7 @@ class BridgeStats:
 
 @dataclass
 class DuplicateCache:
+    """Time-windowed cache to detect and suppress local echoes and forwarded duplicates."""
     """Remember recently forwarded text long enough to stop local echoes."""
 
     ttl_seconds: int
@@ -79,6 +81,7 @@ class DuplicateCache:
 
     @staticmethod
     def _digest(text: str) -> str:
+        """Hash normalized text (whitespace collapsed) for deduplication."""
         normalised = " ".join(text.strip().split())
         return hashlib.sha256(normalised.encode("utf-8")).hexdigest()
 
@@ -99,6 +102,7 @@ class DuplicateCache:
 
 @dataclass
 class RelayRateLimiter:
+    """Per-direction rolling-window rate limiter to prevent bridge floods."""
     """Optional per-direction rolling limiter for accidental bridge floods."""
 
     max_events: int
@@ -195,6 +199,7 @@ def get_int_from_payload(payload: dict[str, Any], *names: str, default: int = -1
 
 
 class MeshVerseBridge:
+    """Public-channel-only relay between Meshtastic and MeshCore radios."""
     """A deliberately narrow, public-channel-only bridge."""
 
     def __init__(self, config: BridgeConfig) -> None:
@@ -605,15 +610,15 @@ def main() -> None:
     )
     try:
         config = build_config(args)
-        check_bridge = MeshVerseBridge(config)
         if args.check_config:
+            # Construct once purely to validate the config and optional alias file.
+            MeshVerseBridge(config)
             LOGGER.info(
                 "Configuration valid for Meshtastic channel %d <-> MeshCore channel %d",
                 config.meshtastic_channel,
                 config.meshcore_channel,
             )
             return
-        del check_bridge
         asyncio.run(run_bridge(config))
     except KeyboardInterrupt:
         LOGGER.info("Shutdown requested by user")

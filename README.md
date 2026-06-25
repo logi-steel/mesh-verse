@@ -173,24 +173,24 @@ And one on the MeshCore side
 
 Name them similarly so you can see your own channel 
 
-unfortunaley for now working is only sending messeages by channels (now, later in project dm's and maybe gpc and telemery will be working) 
+unfortunately for now working is only sending messages by channels (now, later in project dm's and maybe gpc and telemery will be working) 
 
 it will be working be like
 
 
-human A wants to send messeage to human B (A= meshtastic b= meshcore) 
+human A wants to send message to human B (A= meshtastic b= meshcore) 
 
 
-A is sending a messeage by channel 
+A is sending a message by channel 
 
 
 first node picks it up and send it to potato
 
 
-then the potato translate this messeage and send it by second node to group in meshcore 
+then the potato translate this message and send it by second node to group in meshcore 
 
 
-and the node sends the messeage to B and B can see the meseage from another protocol (its like at&t and verizon but they cant send messeages to opposite operator) but with my program they can talk
+and the node sends the message to B and B can see the message from another protocol (its like at&t and verizon but they cant send messages to opposite operator) but with my program they can talk
 
 
 
@@ -199,19 +199,19 @@ and the node sends the messeage to B and B can see the meseage from another prot
 1. do i need raspberry pi?\ no, you can use whatever you want to, (it must have linux, macos, windows)
 
    
-3. does 1 node is enought\ no it isn't, with one node you can't send messeages to another protocol (this is the problem that this program fixes)
+3. does 1 node is enough\ no it isn't, with one node you can't send messages to another protocol (this is the problem that this program fixes)
 
    
-5. does Mesh-Verse install the protocol by default\ no it dosen't, you have to manualy install it (good news is that i gave links to how instal both of them) (meshcore and meshtastic)
+5. does Mesh-Verse install the protocol by default\ no it doesn't, you have to manually install it (good news is that i gave links to how instal both of them) (meshcore and meshtastic)
 
    
-7. what happends if i plug out the node by usb\ brigde will stop working, and you will have to set it up again (ran and prepare the translator)
+7. what happens if i plug out the node by usb\ bridge will stop working, and you will have to set it up again (ran and prepare the translator)
 
    
-9. do the messeages go to internet ?\ no they don't, mesh works by radio vaves
+9. do the messages go to internet ?\ no they don't, mesh works by radio waves
 
 
-11. does bridge sends telemetry and gps ?\ not for now, it will maybe in next verisons but for now (0.1.2) it dosen't
+11. does bridge sends telemetry and gps ?\ not for now, it will maybe in next versions but for now (0.1.2) it doesn't
 
     
 ## License
