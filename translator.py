@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Mesh Verse v0.1.0 public-channel Meshtastic <-> MeshCore bridge.
+"""Mesh Verse v0.1.2 public-channel Meshtastic <-> MeshCore bridge.
 
-The bridge copies text from one selected public channel to another selected
-public channel. It never forwards direct messages, telemetry, positions, files,
-binary packets, or raw LoRa frames.
+The bridge copies text from one selected public channel to another selected public
+channel. It never forwards direct messages, telemetry, positions, files, binary
+packets, or raw LoRa frames.
 
 Run with --check-config and then --dry-run before enabling real transmission.
 """
@@ -12,11 +12,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import deque
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 import hashlib
+import json
 import logging
 import os
+from pathlib import Path
 import time
-from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import meshtastic.serial_interface
@@ -33,6 +37,7 @@ from pubsub import pub
 LOGGER = logging.getLogger("mesh_verse")
 BROADCAST_NODE_NUM = 0xFFFFFFFF
 MIN_RELAY_TEXT_CHARS = 32
+STATUS_SCHEMA_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -46,16 +51,23 @@ class BridgeConfig:
     dry_run: bool
     debug: bool
     alias_file: Optional[str] = None
+    max_relays_per_minute: int = 0
+    status_file: Optional[str] = None
 
 
 @dataclass
 class BridgeStats:
-    """Small local counters printed on graceful shutdown."""
+    """Small local counters printed on graceful shutdown and status snapshots."""
 
     forwarded_mt_to_mc: int = 0
     forwarded_mc_to_mt: int = 0
+    simulated_mt_to_mc: int = 0
+    simulated_mc_to_mt: int = 0
+    failed_mt_to_mc: int = 0
+    failed_mc_to_mt: int = 0
     dropped_echoes: int = 0
     dropped_relay_envelopes: int = 0
+    dropped_rate_limited: int = 0
 
 
 @dataclass
@@ -85,6 +97,29 @@ class DuplicateCache:
         self._entries[(destination, self._digest(text))] = time.monotonic()
 
 
+@dataclass
+class RelayRateLimiter:
+    """Optional per-direction rolling limiter for accidental bridge floods."""
+
+    max_events: int
+    window_seconds: int = 60
+    _timestamps: dict[str, deque[float]] = field(default_factory=dict)
+
+    def allow(self, direction: str) -> bool:
+        if self.max_events == 0:
+            return True
+
+        now = time.monotonic()
+        cutoff = now - self.window_seconds
+        timestamps = self._timestamps.setdefault(direction, deque())
+        while timestamps and timestamps[0] <= cutoff:
+            timestamps.popleft()
+        if len(timestamps) >= self.max_events:
+            return False
+        timestamps.append(now)
+        return True
+
+
 def validate_bridge_config(config: BridgeConfig) -> None:
     """Reject dangerous or impossible local configuration before opening serial."""
     if not config.meshtastic_port.strip() or not config.meshcore_port.strip():
@@ -99,6 +134,16 @@ def validate_bridge_config(config: BridgeConfig) -> None:
         raise ValueError(
             f"max_text_chars must be at least {MIN_RELAY_TEXT_CHARS} so relay labels fit."
         )
+    if config.max_relays_per_minute < 0:
+        raise ValueError("max_relays_per_minute cannot be negative.")
+    if config.status_file is not None:
+        target = Path(config.status_file).expanduser()
+        if target.exists() and target.is_dir():
+            raise ValueError("status_file must point to a file, not a directory.")
+        if not target.parent.exists():
+            raise ValueError(
+                f"The status_file directory does not exist: {target.parent}"
+            )
 
 
 def is_text_port(portnum: Any) -> bool:
@@ -156,6 +201,7 @@ class MeshVerseBridge:
         validate_bridge_config(config)
         self.config = config
         self.deduper = DuplicateCache(config.dedupe_seconds)
+        self.rate_limiter = RelayRateLimiter(config.max_relays_per_minute)
         self.stats = BridgeStats()
         self.aliases = (
             AliasRegistry.from_file(config.alias_file)
@@ -171,6 +217,48 @@ class MeshVerseBridge:
         self._meshtastic_callback: Optional[Any] = None
         self._meshcore_subscriptions: list[Any] = []
         self._closed = False
+        self._status_state = "starting"
+
+    def _write_status(self) -> None:
+        """Persist a small atomic JSON snapshot when the operator requested one."""
+        if self.config.status_file is None:
+            return
+
+        target = Path(self.config.status_file).expanduser()
+        snapshot = {
+            "schema_version": STATUS_SCHEMA_VERSION,
+            "version": __version__,
+            "state": self._status_state,
+            "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "dry_run": self.config.dry_run,
+            "channels": {
+                "meshtastic": self.config.meshtastic_channel,
+                "meshcore": self.config.meshcore_channel,
+            },
+            "max_relays_per_minute": self.config.max_relays_per_minute,
+            "stats": asdict(self.stats),
+        }
+        temporary = target.with_name(f".{target.name}.tmp")
+        try:
+            temporary.write_text(
+                json.dumps(snapshot, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(temporary, target)
+        except OSError as exc:
+            LOGGER.warning("Could not write status file %s: %s", target, exc)
+
+    def _allow_relay(self, direction: str) -> bool:
+        if self.rate_limiter.allow(direction):
+            return True
+        self.stats.dropped_rate_limited += 1
+        LOGGER.warning(
+            "Dropped %s relay because the %d/minute per-direction limit was reached",
+            direction,
+            self.config.max_relays_per_minute,
+        )
+        self._write_status()
+        return False
 
     async def connect(self) -> None:
         """Open both serial links and register incoming-message listeners."""
@@ -189,6 +277,8 @@ class MeshVerseBridge:
 
         self._setup_meshtastic_listener()
         self._setup_meshcore_listener()
+        self._status_state = "online"
+        self._write_status()
         LOGGER.info(
             "Bridge online: Meshtastic channel %d <-> MeshCore channel %d",
             self.config.meshtastic_channel,
@@ -226,12 +316,18 @@ class MeshVerseBridge:
         except Exception:
             LOGGER.exception("Unhandled Meshtastic callback error")
 
-    def _extract_meshtastic_public_text(self, packet: dict[str, Any]) -> Optional[str]:
+    def _extract_meshtastic_public_text(self, packet: Any) -> Optional[str]:
+        if not isinstance(packet, dict):
+            LOGGER.debug("Ignoring Meshtastic event with unexpected packet: %r", packet)
+            return None
         decoded = packet.get("decoded") or {}
-        if not is_text_port(decoded.get("portnum")):
+        if not isinstance(decoded, dict) or not is_text_port(decoded.get("portnum")):
+            return None
+        if "channel" not in packet:
+            LOGGER.debug("Ignoring Meshtastic text packet without a channel index")
             return None
         try:
-            packet_channel = int(packet.get("channel", 0))
+            packet_channel = int(packet["channel"])
         except (TypeError, ValueError):
             return None
         if packet_channel != self.config.meshtastic_channel:
@@ -248,10 +344,12 @@ class MeshVerseBridge:
         if self.deduper.was_sent_to(destination, text):
             self.stats.dropped_echoes += 1
             LOGGER.debug("Dropped %s echo: %r", network, text)
+            self._write_status()
             return True
         if is_relay_text(text):
             self.stats.dropped_relay_envelopes += 1
             LOGGER.debug("Dropped existing Mesh Verse relay envelope from %s: %r", network, text)
+            self._write_status()
             return True
         return False
 
@@ -266,6 +364,11 @@ class MeshVerseBridge:
         alias, relayed_text = self._relay_text("meshtastic", source, text)
         LOGGER.info("Meshtastic -> MeshCore as %s: %s", alias, text)
 
+        if not self.config.dry_run and self.meshcore is None:
+            LOGGER.warning("MeshCore is disconnected; message was not forwarded")
+            return
+        if not self._allow_relay("mt_to_mc"):
+            return
         if self.config.dry_run:
             LOGGER.info(
                 "[dry-run] Would send to MeshCore channel %d: %s",
@@ -273,20 +376,28 @@ class MeshVerseBridge:
                 relayed_text,
             )
             self.deduper.remember_sent_to("meshcore", relayed_text)
-            return
-        if self.meshcore is None:
-            LOGGER.warning("MeshCore is disconnected; message was not forwarded")
+            self.stats.simulated_mt_to_mc += 1
+            self._write_status()
             return
 
-        result = await self.meshcore.commands.send_chan_msg(
-            self.config.meshcore_channel,
-            relayed_text,
-        )
-        if result.type == EventType.ERROR:
-            LOGGER.error("MeshCore rejected message: %s", result.payload)
+        try:
+            result = await self.meshcore.commands.send_chan_msg(
+                self.config.meshcore_channel,
+                relayed_text,
+            )
+        except Exception:
+            self.stats.failed_mt_to_mc += 1
+            LOGGER.exception("Could not forward message to MeshCore")
+            self._write_status()
+            return
+        if getattr(result, "type", None) == EventType.ERROR:
+            self.stats.failed_mt_to_mc += 1
+            LOGGER.error("MeshCore rejected message: %s", getattr(result, "payload", None))
+            self._write_status()
             return
         self.deduper.remember_sent_to("meshcore", relayed_text)
         self.stats.forwarded_mt_to_mc += 1
+        self._write_status()
         LOGGER.info("Forwarded to MeshCore successfully")
 
     async def _on_meshcore_channel_message(self, event: Any) -> None:
@@ -311,6 +422,11 @@ class MeshVerseBridge:
         alias, relayed_text = self._relay_text("meshcore", source, text)
         LOGGER.info("MeshCore -> Meshtastic as %s: %s", alias, text)
 
+        if not self.config.dry_run and self.meshtastic_iface is None:
+            LOGGER.warning("Meshtastic is disconnected; message was not forwarded")
+            return
+        if not self._allow_relay("mc_to_mt"):
+            return
         if self.config.dry_run:
             LOGGER.info(
                 "[dry-run] Would send to Meshtastic channel %d: %s",
@@ -318,19 +434,25 @@ class MeshVerseBridge:
                 relayed_text,
             )
             self.deduper.remember_sent_to("meshtastic", relayed_text)
-            return
-        if self.meshtastic_iface is None:
-            LOGGER.warning("Meshtastic is disconnected; message was not forwarded")
+            self.stats.simulated_mc_to_mt += 1
+            self._write_status()
             return
 
-        self.meshtastic_iface.sendText(
-            relayed_text,
-            destinationId="^all",
-            wantAck=False,
-            channelIndex=self.config.meshtastic_channel,
-        )
+        try:
+            self.meshtastic_iface.sendText(
+                relayed_text,
+                destinationId="^all",
+                wantAck=False,
+                channelIndex=self.config.meshtastic_channel,
+            )
+        except Exception:
+            self.stats.failed_mc_to_mt += 1
+            LOGGER.exception("Could not forward message to Meshtastic")
+            self._write_status()
+            return
         self.deduper.remember_sent_to("meshtastic", relayed_text)
         self.stats.forwarded_mc_to_mt += 1
+        self._write_status()
         LOGGER.info("Forwarded to Meshtastic successfully")
 
     async def close(self) -> None:
@@ -364,12 +486,20 @@ class MeshVerseBridge:
             except Exception:
                 LOGGER.exception("Meshtastic disconnect failed")
 
+        self._status_state = "closed"
+        self._write_status()
         LOGGER.info(
-            "Bridge closed | MT->MC=%d MC->MT=%d echoes=%d relay-envelopes=%d",
+            "Bridge closed | MT->MC=%d MC->MT=%d simulated=%d/%d failures=%d/%d "
+            "echoes=%d relay-envelopes=%d rate-limited=%d",
             self.stats.forwarded_mt_to_mc,
             self.stats.forwarded_mc_to_mt,
+            self.stats.simulated_mt_to_mc,
+            self.stats.simulated_mc_to_mt,
+            self.stats.failed_mt_to_mc,
+            self.stats.failed_mc_to_mt,
             self.stats.dropped_echoes,
             self.stats.dropped_relay_envelopes,
+            self.stats.dropped_rate_limited,
         )
 
 
@@ -413,6 +543,16 @@ def parse_args() -> argparse.Namespace:
         help="Maximum relayed text length including the Mesh Verse envelope (default: 180)",
     )
     parser.add_argument(
+        "--max-relays-per-minute",
+        type=int,
+        default=0,
+        help="Maximum relays per direction in a rolling minute; 0 disables the limit (default: 0)",
+    )
+    parser.add_argument(
+        "--status-file",
+        help="Optional JSON status snapshot path, updated after bridge activity",
+    )
+    parser.add_argument(
         "--alias-file",
         help="Optional JSON source-ID to friendly-alias map; see bridge_aliases.example.json",
     )
@@ -441,6 +581,8 @@ def build_config(args: argparse.Namespace) -> BridgeConfig:
         dry_run=args.dry_run,
         debug=args.debug,
         alias_file=args.alias_file,
+        max_relays_per_minute=args.max_relays_per_minute,
+        status_file=args.status_file,
     )
 
 
@@ -478,6 +620,9 @@ def main() -> None:
     except (AliasConfigurationError, ValueError) as exc:
         LOGGER.error("Configuration error: %s", exc)
         raise SystemExit(2) from exc
+    except Exception:
+        LOGGER.exception("Mesh Verse stopped because of an unexpected runtime error")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
