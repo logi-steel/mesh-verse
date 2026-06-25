@@ -135,12 +135,18 @@ GNU GPL v3. See [LICENSE](LICENSE).
 # What is it 
 self hosting a mesh-verse is not that big of a problem
 you need 
-**A Raspberry pi (the recomended version for medium usage is pi4 4gb ) and up to newest verison** 
-**2 nodes wich one will be operating in meshcore and the second on meshtastic** 
-**A usb cable to connect the nodes to raspberry pi** 
+**A Raspberry pi (the recomended version for medium usage is pi4 4gb ) and up to newest verison**
+
+**2 nodes wich one will be operating in meshcore and the second on meshtastic**
+
+**A usb cable to connect the nodes to raspberry pi**
+
 **antenas to both radios (you can buy all in one radio with antena like the T-Echo from LILY-GO) for the connection to work**
+
 **stable power (or working with power bank but this is a lottery wich compuetrs like raspberry pi dont like)**
+
 **FOR CLARITY you can use whatever computer you like. but it must have enought powwer. but you can run it on literaly potato pc (if 2gb ram and 2 cores are potato pc then yes)**
+
 
 # Firmware 
 for the potato you need
