@@ -127,9 +127,7 @@ The tests use fake radios. They check program logic, not real radio range or eve
 
 `deploy/meshverse.service` is an optional systemd template for running Mesh Verse on boot. It reads settings from `/etc/mesh-verse/bridge.env`.
 
-## License
 
-GNU GPL v3. See [LICENSE](LICENSE).
 
 ## SELF-HOSTING (how to do it and is it worth it) (it is not)
 
@@ -216,7 +214,9 @@ and the node sends the messeage to B and B can see the meseage from another prot
 11. does bridge sends telemetry and gps ?\ not for now, it will maybe in next verisons but for now (0.1.2) it dosen't
 
     
+## License
 
+GNU GPL v3. See [LICENSE](LICENSE).
 
 
 
