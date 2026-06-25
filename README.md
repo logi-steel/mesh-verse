@@ -139,43 +139,44 @@ self hosting a mesh-verse is not that big of a problem
 
 you need
 
-**A Raspberry pi (the recomended version for medium usage is pi4 4gb ) and up to newest verison**
+**A Raspberry Pi (the recommended version for medium usage is Pi 4 4 GB) and up to newest version**
 
-**2 nodes wich one will be operating in meshcore and the second on meshtastic**
+**2 nodes which one will be operating in MeshCore and the second on Meshtastic**
 
-**A usb cable to connect the nodes to raspberry pi**
+**A USB cable to connect the nodes to Raspberry Pi**
 
-**antenas to both radios (you can buy all in one radio with antena like the T-Echo from LILY-GO) for the connection to work**
+**antennas to both radios (you can buy all in one radio with antenna like the T-Echo from LILY-GO) for the connection to work**
 
-**stable power (or working with power bank but this is a lottery wich compuetrs like raspberry pi dont like)**
+**stable power (or working with power bank but this is a lottery which computers like Raspberry Pi don't like)**
 
-**FOR CLARITY you can use whatever computer you like. but it must have enought powwer. but you can run it on literaly potato pc (if 2gb ram and 2 cores are potato pc then yes)**
+**FOR CLARITY you can use whatever computer you like. but it must have enough power. but you can run it on literally potato PC (if 2 GB RAM and 2 cores are potato PC then yes)**
 
 
 # Firmware 
 for the potato you need
 
-my (not realy mine) program 
+my (not really mine) program 
 
-on 1 node instal meshtastic (https://github.com/Xinyuan-LilyGO/T-Echo/blob/main/firmware/README.MD)
+on 1 node install Meshtastic (https://github.com/Xinyuan-LilyGO/T-Echo/blob/main/firmware/README.MD)
 
-on second instal meshcore (https://nodakmesh.org/meshcore/setup) 
+on second install MeshCore (https://nodakmesh.org/meshcore/setup) 
 
 and on potato 
-linux| macos| windows (MacOS isn't testes yet so take it as "its unix it works the same")
+linux | macOS | windows (macOS isn't tested yet so take it as "it's unix it works the same")
 
 #REMEMBER TO BACKUP ANYTHING ON YOUR DEVICES BEFORE DOING THIS !!!
 
 
-# CANAL 
+# CHANNEL 
 
-Make one chanell on the meshtastic side 
+Make one channel on the Meshtastic side 
 
-And one on the meshcore side
+And one on the MeshCore side
 
-name them similary so you can see your own chanell 
+name them similarly so you can see your own channel 
 
 The only tech limitation currently is that you can't send dm's 
+
 
 
 
