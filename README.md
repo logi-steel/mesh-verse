@@ -131,8 +131,8 @@ The tests use fake radios. They check program logic, not real radio range or eve
 
 GNU GPL v3. See [LICENSE](LICENSE).
 
-##SELF-HOSTING (how to do it and is it worth it) (it is not)
-#What is it 
+## SELF-HOSTING (how to do it and is it worth it) (it is not)
+# What is it 
 self hosting a mesh-verse is not that big of a problem
 you need 
 **A Raspberry pi (the recomended version for medium usage is pi4 4gb ) and up to newest verison** 
@@ -142,7 +142,7 @@ you need
 **stable power (or working with power bank but this is a lottery wich compuetrs like raspberry pi dont like)**
 **FOR CLARITY you can use whatever computer you like. but it must have enought powwer. but you can run it on literaly potato pc (if 2gb ram and 2 cores are potato pc then yes)**
 
-#Firmware 
+# Firmware 
 for the potato you need
 my (not realy mine) program 
 on 1 node instal meshtastic (https://github.com/Xinyuan-LilyGO/T-Echo/blob/main/firmware/README.MD)
@@ -152,7 +152,7 @@ linux| macos| windows (MacOS isn't testes yet so take it as "its unix it works t
 #REMEMBER TO BACKUP ANYTHING ON YOUR DEVICES BEFORE DOING THIS !!!
 
 
-#CANAL 
+# CANAL 
 Make one chanell on the meshtastic side 
 And one on the meshcore side
 name them similary so you can see your own chanell 
