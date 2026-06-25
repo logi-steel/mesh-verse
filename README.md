@@ -135,9 +135,9 @@ GNU GPL v3. See [LICENSE](LICENSE).
 
 # What is it
 
-self hosting a mesh-verse is not that big of a problem
+Self hosting a Mesh-verse is not that big of a problem
 
-you need
+You need
 
 **A Raspberry Pi (the recommended version for medium usage is Pi 4 4 GB) and up to newest version**
 
@@ -153,9 +153,9 @@ you need
 
 
 # Firmware 
-for the potato you need
+For the potato you need
 
-my (not really mine) program 
+My (not really mine) program 
 
 on 1 node install Meshtastic (https://github.com/Xinyuan-LilyGO/T-Echo/blob/main/firmware/README.MD)
 
@@ -164,7 +164,7 @@ on second install MeshCore (https://nodakmesh.org/meshcore/setup)
 and on potato 
 linux | macOS | windows (macOS isn't tested yet so take it as "it's unix it works the same")
 
-#REMEMBER TO BACKUP ANYTHING ON YOUR DEVICES BEFORE DOING THIS !!!
+**REMEMBER TO BACKUP ANYTHING ON YOUR DEVICES BEFORE DOING THIS !!**
 
 
 # CHANNEL 
@@ -173,7 +173,7 @@ Make one channel on the Meshtastic side
 
 And one on the MeshCore side
 
-name them similarly so you can see your own channel 
+Name them similarly so you can see your own channel 
 
 The only tech limitation currently is that you can't send dm's 
 
